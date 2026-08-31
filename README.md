@@ -9,6 +9,8 @@ It's not trying to replace `base64` (the coreutils one). It's a from-scratch imp
 * **Binary-safe:** Works on raw byte buffers, not null-terminated strings, so images and other binary files round-trip correctly instead of getting truncated at the first `\0`.
 * **Strict validation on decode:** Malformed input (bad padding, wrong alphabet for the mode, invalid length) is rejected with a clear error instead of silently producing garbage.
 * **File I/O:** Encode/decode straight to and from files, not just inline strings.
+* **Unix filter:** Reads stdin and writes stdout by default, so it pipes: cat file | ./b64 encode | ./b64 decode
+* **Whitespace-tolerant decode:** Newlines, spaces, and tabs in base64 input are ignored, so line-wrapped (MIME-style) input and trailing newlines from pipes both decode fine.
 
 ## Installation
 
@@ -56,11 +58,26 @@ Drop `-o` to print the result to stdout instead of writing a file:
 ```bash
 ./b64 encode -f photo.png
 ```
+
+Pipe through stdin/stdout — omit both `text` and `-f`:
+
+```bash
+cat photo.png | ./b64 encode > photo.b64
+cat photo.b64 | ./b64 decode > restored.png
+cat photo.png | ./b64 encode | ./b64 decode | cmp - photo.png
+```
+
+`-f -` also means stdin, if you prefer being explicit.
+
+```bash
+cat photo.png | ./b64 encode -f -
+```
+
+Decoded output is written byte-for-byte with **no trailing newline**, so binary files round-trip exactly. Encoded output gets a newline only when it goes to stdout.
 ## WIP, Performance, Limitations
 
-* **Whole-file loading:** The current implementation reads the entire input into memory before encoding. Fine for anything up to a few hundred MB; not fine for multi-gigabyte files. Streaming (chunked read/encode/write) is on the roadmap.
-* **No stdin/stdout piping yet:** You currently need `-f <path>` for file input, `cat file | ./b64 encode` doesn't work yet. Also on the roadmap.
-* **No Base85 (for now):** Deliberately out of scope for now. Base64 was the point of this exercise; Base85 is a "maybe later, for fun" extension.
+* **Whole-file loading:** Input is read fully into memory before encoding, including when reading from a pipe. Fine up to a few hundred MB; not fine for multi-gigabyte files. Streaming (chunked read/encode/write) is on the roadmap and is what will actually make piping cheap.
+* **No Base85 (for now) or other encoding algorithms:** Deliberately out of scope for now. Base64 was the point of this exercise; Base85 (or others) is a "maybe later, for fun" extension.
 
 -----
-*Note: b64 is a learning project, not a production crypto or encoding library. It doesn't encrypt anything, base64 is just a reversible encoding, not a cipher.*
+*Note: b64-cli is a learning project, not a production crypto or encoding library. It doesn't encrypt anything, base64 is just a reversible encoding, not a cipher.*

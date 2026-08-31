@@ -130,68 +130,65 @@ unsigned char *base64_decode(const char *data, size_t input_length, size_t *outp
     return decoded_data;
 }
 
+static unsigned char *read_stream(FILE *f, size_t *len) {
+    size_t cap = 65536, n = 0;
+    unsigned char *buf = malloc(cap);
+    if (!buf) return NULL;
+
+    for (;;) {
+        if (n == cap) {
+            unsigned char *tmp = realloc(buf, cap * 2);
+            if (!tmp) { free(buf); return NULL; }
+            buf = tmp;
+            cap *= 2;
+        }
+        size_t got = fread(buf + n, 1, cap - n, f);
+        n += got;
+        if (got == 0) {
+            if (ferror(f)) { free(buf); return NULL; }
+            break;  
+        }
+    }
+
+    if (n == cap) {
+        unsigned char *tmp = realloc(buf, cap + 1);
+        if (!tmp) { free(buf); return NULL; }
+        buf = tmp;
+    }
+    buf[n] = '\0';
+    *len = n;
+    return buf;
+}
+
 static unsigned char *read_file(const char *path, size_t *len) {
     FILE *f = fopen(path, "rb");
     if (!f) {
         fprintf(stderr, "Error: could not open '%s' for reading.\n", path);
         return NULL;
     }
-
-    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
-    long size = ftell(f);
-    if (size < 0) { fclose(f); return NULL; }
-    rewind(f);
-
-    unsigned char *buf = malloc((size_t)size + 1);
-    if (!buf) { fclose(f); return NULL; }
-
-    size_t read_bytes = fread(buf, 1, (size_t)size, f);
+    unsigned char *buf = read_stream(f, len);
     fclose(f);
-
-    if (read_bytes != (size_t)size) {
-        fprintf(stderr, "Error: short read on '%s'.\n", path);
-        free(buf);
-        return NULL;
-    }
-
-    buf[size] = '\0';
-    *len = (size_t)size;
+    if (!buf) fprintf(stderr, "Error: read failed on '%s'.\n", path);
     return buf;
-}
-
-static int write_file(const char *path, const unsigned char *data, size_t len) {
-    FILE *f = fopen(path, "wb");
-    if (!f) {
-        fprintf(stderr, "Error: could not open '%s' for writing.\n", path);
-        return 0;
-    }
-    size_t written = fwrite(data, 1, len, f);
-    fclose(f);
-    if (written != len) {
-        fprintf(stderr, "Error: short write on '%s'.\n", path);
-        return 0;
-    }
-    return 1;
 }
 
 static void usage(const char *prog) {
     fprintf(stderr,
-        "Usage:\n"
-        "  %s <encode|decode|urlencode|urldecode> \"text\"\n"
-        "  %s <encode|decode|urlencode|urldecode> -f <input_path> [-o <output_path>]\n",
-        prog, prog);
+        "Usage: \n"
+        "%s <encode|decode|urlencode|urldecode> [text] [-f <in>] [-o <out>]\n"
+        "Input:  a literal text argument, -f <path> to read a file,\n"
+        "        or nothing at all to read stdin (-f - also means stdin).\n"
+        "Output: -o <path> to write a file, otherwise stdout.\n",
+        prog);
 }
 
 int main(int argc, char *argv[]) {
-    if (argc < 3) {
-        usage(argv[0]);
-        return 1;
-    }
+    if (argc < 2) { usage(argv[0]); return 1; }
 
     const char *action = argv[1];
-    int url_safe = (strcmp(action, "urlencode") == 0 || strcmp(action, "urldecode") == 0);
-    int is_encode = (strcmp(action, "encode") == 0 || strcmp(action, "urlencode") == 0);
-    int is_decode = (strcmp(action, "decode") == 0 || strcmp(action, "urldecode") == 0);
+    int url_safe  = (strcmp(action, "urlencode") == 0 || strcmp(action, "urldecode") == 0);
+    int is_encode = (strcmp(action, "encode")    == 0 || strcmp(action, "urlencode") == 0);
+    int is_decode = (strcmp(action, "decode")    == 0 || strcmp(action, "urldecode") == 0);
 
     if (!is_encode && !is_decode) {
         fprintf(stderr, "Unknown command: %s\n", action);
@@ -199,75 +196,80 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    /* file mode: b64 <action> -f <input_path> [-o <output_path>] */
-    if (strcmp(argv[2], "-f") == 0) {
-        if (argc < 4) {
-            fprintf(stderr, "Error: -f requires an input path.\n");
+    const char *in_path = NULL, *out_path = NULL, *text = NULL;
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "-f") == 0) {
+            if (++i >= argc) { fprintf(stderr, "Error: -f requires a path.\n"); return 1; }
+            in_path = argv[i];
+        } else if (strcmp(argv[i], "-o") == 0) {
+            if (++i >= argc) { fprintf(stderr, "Error: -o requires a path.\n"); return 1; }
+            out_path = argv[i];
+        } else if (!text) {
+            text = argv[i];
+        } else {
+            fprintf(stderr, "Error: unexpected argument '%s'.\n", argv[i]);
             return 1;
         }
-        const char *in_path = argv[3];
-        const char *out_path = NULL;
-        for (int i = 4; i < argc - 1; i++) {
-            if (strcmp(argv[i], "-o") == 0) {
-                out_path = argv[i + 1];
-                break;
-            }
-        }
-
-        size_t in_len = 0;
-        unsigned char *in_buf = read_file(in_path, &in_len);
-        if (!in_buf) return 1;
-
-        if (is_encode) {
-            char *result = base64_encode(in_buf, in_len, url_safe);
-            free(in_buf);
-            if (!result) {
-                fprintf(stderr, "Error: encoding failed.\n");
-                return 1;
-            }
-            if (out_path) {
-                int ok = write_file(out_path, (unsigned char *)result, strlen(result));
-                free(result);
-                return ok ? 0 : 1;
-            }
-            printf("%s\n", result);
-            free(result);
-        } else {
-            size_t out_len = 0;
-            unsigned char *result = base64_decode((char *)in_buf, in_len, &out_len, url_safe);
-            free(in_buf);
-            if (!result) {
-                fprintf(stderr, "Error: invalid base64 input.\n");
-                return 1;
-            }
-            if (out_path) {
-                int ok = write_file(out_path, result, out_len);
-                free(result);
-                return ok ? 0 : 1;
-            }
-            fwrite(result, 1, out_len, stdout);
-            free(result);
-        }
-        return 0;
+    }
+    if (text && in_path) {
+        fprintf(stderr, "Error: give either text or -f, not both.\n");
+        return 1;
     }
 
-    /* string mode: b64 <action> "text" */
-    const char *input = argv[2];
+    /* acquire input: literal text, file, or stdin */
+    unsigned char *in_buf = NULL;
+    size_t in_len = 0;
+    int owns_input = 0;
+
+    if (text) {
+        in_buf = (unsigned char *)text;
+        in_len = strlen(text);
+    } else if (in_path && strcmp(in_path, "-") != 0) {
+        in_buf = read_file(in_path, &in_len);
+        if (!in_buf) return 1;
+        owns_input = 1;
+    } else {
+        in_buf = read_stream(stdin, &in_len);
+        if (!in_buf) { fprintf(stderr, "Error: read from stdin failed.\n"); return 1; }
+        owns_input = 1;
+    }
+
+    FILE *out = stdout;
+    if (out_path) {
+        out = fopen(out_path, "wb");
+        if (!out) {
+            fprintf(stderr, "Error: could not open '%s' for writing.\n", out_path);
+            if (owns_input) free(in_buf);
+            return 1;
+        }
+    }
+
+    int rc = 0;
     if (is_encode) {
-        char *result = base64_encode((const unsigned char *)input, strlen(input), url_safe);
-        if (!result) return 1;
-        printf("%s\n", result);
-        free(result);
+        char *result = base64_encode(in_buf, in_len, url_safe);
+        if (!result) { fprintf(stderr, "Error: encoding failed.\n"); rc = 1; }
+        else {
+            size_t n = strlen(result);
+            if (fwrite(result, 1, n, out) != n) rc = 1;
+            if (!out_path) fputc('\n', out);
+            free(result);
+        }
     } else {
         size_t out_len = 0;
-        unsigned char *result = base64_decode(input, strlen(input), &out_len, url_safe);
-        if (!result) {
-            fprintf(stderr, "Error: invalid base64 input.\n");
-            return 1;
+        unsigned char *result = base64_decode((const char *)in_buf, in_len, &out_len, url_safe);
+        if (!result) { fprintf(stderr, "Error: invalid base64 input.\n"); rc = 1; }
+        else {
+            if (fwrite(result, 1, out_len, out) != out_len) rc = 1;
+            free(result);
         }
-        fwrite(result, 1, out_len, stdout);
-        free(result);
     }
 
-    return 0;
+    if (owns_input) free(in_buf);
+    if (out_path) {
+        if (fclose(out) != 0) rc = 1;
+    } else {
+        if (fflush(out) != 0) rc = 1;
+    }
+    if (rc) fprintf(stderr, "Error: write failed.\n");
+    return rc;
 }
