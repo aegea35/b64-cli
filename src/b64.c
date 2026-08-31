@@ -63,47 +63,51 @@ static int b64_validate_padding(const char *data, size_t len, int url_safe) {
     return 1;
 }
 
+/* +4 for worst case padding, +1 for NUL */
+static char *b64_normalize(const char *data, size_t input_length, size_t *out_len) {
+    char *buf = malloc(input_length + 5);
+    if (!buf) return NULL;
+
+    size_t n = 0;
+    for (size_t i = 0; i < input_length; i++) {
+        char c = data[i];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f') continue;
+        buf[n++] = c;
+    }
+
+    size_t rem = n % 4;
+    if (rem == 1) { free(buf); return NULL; }  /* impossible length */
+    if (rem != 0) {
+        memset(buf + n, '=', 4 - rem);
+        n += 4 - rem;
+    }
+
+    buf[n] = '\0';
+    *out_len = n;
+    return buf;
+}
+
 unsigned char *base64_decode(const char *data, size_t input_length, size_t *output_length, int url_safe) {
-    if (input_length == 0) {
-        *output_length = 0;
-        unsigned char *empty = malloc(1);
-        if (empty) empty[0] = '\0';
-        return empty;
-    }
+    size_t len = 0;
+    char *work_data = b64_normalize(data, input_length, &len);
+    if (!work_data) return NULL;
 
-    size_t padded_len = input_length;
-    char *padded_data = NULL;
-    const char *work_data = data;
-	
-    /* a single leftover char can never be valid base64. reject it instead of producing garbage. */
-    if (input_length % 4 != 0) {
-        size_t pad = 4 - (input_length % 4);
-        if (input_length % 4 == 1) return NULL;
-        padded_len = input_length + pad;
-        padded_data = malloc(padded_len + 1);
-        if (!padded_data) return NULL;
-        memcpy(padded_data, data, input_length);
-        memset(padded_data + input_length, '=', pad);
-        padded_data[padded_len] = '\0';
-        work_data = padded_data;
-    }
-
-    if (!b64_validate_padding(work_data, padded_len, url_safe)) {
-        free(padded_data);
+    if (!b64_validate_padding(work_data, len, url_safe)) {
+        free(work_data);
         return NULL;
     }
 
-    *output_length = padded_len / 4 * 3;
-    if (padded_len >= 1 && work_data[padded_len - 1] == '=') (*output_length)--;
-    if (padded_len >= 2 && work_data[padded_len - 2] == '=') (*output_length)--;
+    *output_length = len / 4 * 3;
+    if (len >= 1 && work_data[len - 1] == '=') (*output_length)--;
+    if (len >= 2 && work_data[len - 2] == '=') (*output_length)--;
 
     unsigned char *decoded_data = malloc(*output_length + 1);
     if (!decoded_data) {
-        free(padded_data);
+        free(work_data);
         return NULL;
     }
 
-    for (size_t i = 0, j = 0; i < padded_len;) {
+    for (size_t i = 0, j = 0; i < len;) {
         int sextet_a = work_data[i] == '=' ? 0 : b64_char_value(work_data[i], url_safe); i++;
         int sextet_b = work_data[i] == '=' ? 0 : b64_char_value(work_data[i], url_safe); i++;
         int sextet_c = work_data[i] == '=' ? 0 : b64_char_value(work_data[i], url_safe); i++;
@@ -111,7 +115,7 @@ unsigned char *base64_decode(const char *data, size_t input_length, size_t *outp
 
         if (sextet_a == -1 || sextet_b == -1 || sextet_c == -1 || sextet_d == -1) {
             free(decoded_data);
-            free(padded_data);
+            free(work_data);
             return NULL;
         }
 
@@ -122,7 +126,7 @@ unsigned char *base64_decode(const char *data, size_t input_length, size_t *outp
     }
 
     decoded_data[*output_length] = '\0';
-    free(padded_data);
+    free(work_data);
     return decoded_data;
 }
 
@@ -242,7 +246,6 @@ int main(int argc, char *argv[]) {
                 return ok ? 0 : 1;
             }
             fwrite(result, 1, out_len, stdout);
-            printf("\n");
             free(result);
         }
         return 0;
@@ -263,7 +266,6 @@ int main(int argc, char *argv[]) {
             return 1;
         }
         fwrite(result, 1, out_len, stdout);
-        printf("\n");
         free(result);
     }
 
