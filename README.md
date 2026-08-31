@@ -7,7 +7,7 @@ It's not trying to replace `base64` (the coreutils one). It's a from-scratch imp
 ## Key Features
 * **Standard + URL-safe encoding:** Switch alphabets (`+`/`/` vs `-`/`_`) with a flag, same core logic underneath.
 * **Binary-safe:** Works on raw byte buffers, not null-terminated strings, so images and other binary files round-trip correctly instead of getting truncated at the first `\0`.
-* **Strict validation on decode:** Malformed input (bad padding, wrong alphabet for the mode, invalid length) is rejected with a clear error instead of silently producing garbage.
+* **Strict validation on decode:** Wrong-alphabet characters, misplaced =, and impossible lengths are rejected with a clear error instead of silently producing garbage. Whitespace is ignored and missing trailing = is tolerated since both are common in real-world base64.
 * **File I/O:** Encode/decode straight to and from files, not just inline strings.
 * **Unix filter:** Reads stdin and writes stdout by default, so it pipes: cat file | ./b64 encode | ./b64 decode
 * **Whitespace-tolerant decode:** Newlines, spaces, and tabs in base64 input are ignored, so line-wrapped (MIME-style) input and trailing newlines from pipes both decode fine.
@@ -59,7 +59,7 @@ Drop `-o` to print the result to stdout instead of writing a file:
 ./b64 encode -f photo.png
 ```
 
-Pipe through stdin/stdout — omit both `text` and `-f`:
+Pipe through stdin/stdout omit both `text` and `-f`:
 
 ```bash
 cat photo.png | ./b64 encode > photo.b64
