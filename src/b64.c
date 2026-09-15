@@ -20,28 +20,32 @@ static int b64_char_value(char c, int url_safe) {
     return -1;
 }
 
-char *base64_encode(const unsigned char *data, size_t input_length, int url_safe) {
+static size_t b64_encode_block(const unsigned char *data, size_t input_length, char *out, int url_safe, int final) {
     const char *table = url_safe ? b64_table_url : b64_table_std;
-    size_t output_length = 4 * ((input_length + 2) / 3);
-
-    char *encoded_data = malloc(output_length + 1);
-    if (!encoded_data) return NULL;
-
-    for (size_t i = 0, j = 0; i < input_length;) {
+    if (!final && input_length % 3 != 0) return 0;
+    size_t i = 0, j = 0;
+    while (i < input_length) {
         size_t group_start = i;
         uint32_t octet_a = i < input_length ? data[i++] : 0;
         uint32_t octet_b = i < input_length ? data[i++] : 0;
         uint32_t octet_c = i < input_length ? data[i++] : 0;
 
-        uint32_t triple = (octet_a << 16) + (octet_b << 8) + octet_c;
+        uint32_t triple = (octet_a << 16) | (octet_b << 8) | octet_c;
 
-        encoded_data[j++] = table[(triple >> 18) & 0x3F];
-        encoded_data[j++] = table[(triple >> 12) & 0x3F];
-        encoded_data[j++] = (i - group_start < 2) ? '=' : table[(triple >> 6) & 0x3F];
-        encoded_data[j++] = (i - group_start < 3) ? '=' : table[triple & 0x3F];
+        out[j++] = table[(triple >> 18) & 0x3F];
+        out[j++] = table[(triple >> 12) & 0x3F];
+        out[j++] = (i - group_start < 2) ? '=' : table[(triple >> 6) & 0x3F];
+        out[j++] = (i - group_start < 3) ? '=' : table[triple & 0x3F];
     }
+    return j;
+}
 
-    encoded_data[output_length] = '\0';
+char *base64_encode(const unsigned char *data, size_t input_length, int url_safe) {
+    size_t output_length = 4 * ((input_length + 2) / 3);
+    char *encoded_data = malloc(output_length + 1);
+    if (!encoded_data) return NULL;
+    size_t n = b64_encode_block(data, input_length, encoded_data, url_safe, 1);
+    encoded_data[n] = '\0';
     return encoded_data;
 }
 
